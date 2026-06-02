@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import pdfplumber
 import re
 from collections import defaultdict
@@ -8,112 +7,129 @@ st.set_page_config(page_title="值班连班统计", layout="wide")
 st.title("📊 值班表连班统计工具")
 
 uploaded_file = st.file_uploader("上传PDF值班表", type=["pdf"])
+
+# 人员配置
+default_control_staff = "陈宇鸣 周贤民 吴迪 王浩宇 林泓辰 陈育盛 钟洪达"
+control_staff_input = st.text_input("运行控制/计划人员名单（空格分隔）", value=default_control_staff)
+management_staff_input = st.text_input("运行管理人员名单（空格分隔）", value="周贤民 陈宇鸣 王浩宇 翟一帆 鲁翔伟 张光超")
+
 exception_text = st.text_area(
-    "特殊情况（运行管理当天不是连班）",
+    "例外（运行管理人员当天不是连班）",
     placeholder="每行一个：日期 姓名，例如：\n6月1日 周贤民\n6月5日 陈宇鸣"
 )
 
 if uploaded_file:
+    control_staff = set(control_staff_input.strip().split())
+    management_staff = set(management_staff_input.strip().split())
+
+    # 解析例外
+    exceptions = set()
+    if exception_text:
+        for line in exception_text.strip().split("\n"):
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                date_str = parts[0]
+                name = parts[1]
+                exceptions.add((date_str, name))
+
+    # 读取PDF文本
     with pdfplumber.open(uploaded_file) as pdf:
-        page = pdf.pages[0]
-        tables = page.extract_tables()
-        if not tables:
-            st.error("未检测到表格")
-            st.stop()
-        table = tables[0]
-        df = pd.DataFrame(table)
-        st.subheader("原始表格预览")
-        st.dataframe(df.head(10))
+        all_text = ""
+        for page in pdf.pages:
+            all_text += page.extract_text() + "\n"
 
-        # 1. 查找表头行（包含“运行控制”、“运行管理”）
-        header_row_idx = None
-        for i, row in df.iterrows():
-            row_str = " ".join([str(cell) for cell in row if cell])
-            if "运行控制" in row_str and "运行管理" in row_str:
-                header_row_idx = i
-                break
-        if header_row_idx is None:
-            st.error("未找到包含'运行控制'和'运行管理'的表头")
-            st.stop()
+    lines = all_text.split("\n")
 
-        headers = df.iloc[header_row_idx].fillna("").astype(str)
-        col_mapping = {}  # {列索引: 岗位类型}
-        for idx, header in enumerate(headers):
-            if "运行控制" in header:
-                col_mapping[idx] = "control"
-            elif "运行管理" in header:
-                col_mapping[idx] = "management"
-            elif "运行计划" in header:
-                col_mapping[idx] = "plan"
+    # 提取每天的白班和夜班
+    # 规则：一行中包含“白”或“晚”表示该行是白班或夜班，并且这一行的第一个词通常是星期几+日期
+    day_shifts = []   # 元素: (日期字符串, 姓名列表)
+    night_shifts = []
 
-        # 2. 提取所有数据行（表头之后且包含“白”或“夜”）
-        data_rows = []
-        for i in range(header_row_idx + 1, len(df)):
-            row = df.iloc[i].fillna("").astype(str)
-            if any("白" in cell or "夜" in cell for cell in row if cell):
-                data_rows.append(row)
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # 检查是否包含白班或夜班标识
+        if "白" in line and not "晚" in line:
+            # 提取日期（例如“星期一 1日”或“星期一白”）
+            date_match = re.search(r"(\d+月\d+日|\d+日)", line)
+            date_str = date_match.group(1) if date_match else ""
+            # 提取所有中文姓名（2-3个汉字，常见姓名）
+            names = re.findall(r"[\u4e00-\u9fa5]{2,3}", line)
+            # 过滤掉明显不是人名的词（如“星期一”、“运行控制”等）
+            filtered_names = [n for n in names if n not in ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "运行控制", "运行管理", "白班", "夜班", "带班主任"]]
+            if filtered_names:
+                day_shifts.append((date_str, filtered_names))
+        elif "晚" in line:
+            date_match = re.search(r"(\d+月\d+日|\d+日)", line)
+            date_str = date_match.group(1) if date_match else ""
+            names = re.findall(r"[\u4e00-\u9fa5]{2,3}", line)
+            filtered_names = [n for n in names if n not in ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "运行控制", "运行管理", "白班", "夜班", "带班主任"]]
+            if filtered_names:
+                night_shifts.append((date_str, filtered_names))
 
-        # 3. 配对白班和夜班（相邻两行，上行白班，下行夜班）
-        schedules = []
-        for i in range(0, len(data_rows) - 1, 2):
-            day_row = data_rows[i]
-            night_row = data_rows[i+1]
-            if ("白" in str(day_row[0]) or "白班" in str(day_row[0])) and \
-               ("夜" in str(night_row[0]) or "夜班" in str(night_row[0])):
-                schedules.append({"day": day_row, "night": night_row})
+    # 配对：白班和夜班按顺序一一对应（假设PDF中白班和夜班交替出现）
+    schedules = []
+    min_len = min(len(day_shifts), len(night_shifts))
+    for i in range(min_len):
+        date_day, day_names = day_shifts[i]
+        date_night, night_names = night_shifts[i]
+        # 使用白班的日期（通常更准确）
+        date_str = date_day if date_day else date_night
+        schedules.append({
+            "date": date_str,
+            "day": day_names,
+            "night": night_names
+        })
 
-        if not schedules:
-            st.error("未识别到白班/夜班配对，请检查PDF格式")
-            st.stop()
+    if not schedules:
+        st.error("未识别到任何班次数据，请检查PDF格式是否包含'白'和'晚'字样")
+        st.stop()
 
-        # 4. 解析例外
-        exceptions = set()
-        if exception_text:
-            for line in exception_text.strip().split("\n"):
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    date_str = parts[0]
-                    name = parts[1]
-                    exceptions.add((date_str, name))
+    st.success(f"成功识别 {len(schedules)} 天的排班数据")
 
-        # 5. 统计连班天数
-        stats = defaultdict(lambda: {"consecutive": 0})
+    # 统计连班天数
+    stats = defaultdict(lambda: {"consecutive": 0})
 
-        for idx, sch in enumerate(schedules):
-            day_cells = sch["day"]
-            night_cells = sch["night"]
-            # 提取当前日期（从第一个单元格中找“X月X日”）
-            date_cell = str(day_cells[0])
-            date_match = re.search(r"(\d+月\d+日)", date_cell)
-            date_str = date_match.group(1) if date_match else f"第{idx+1}天"
+    for sch in schedules:
+        date_str = sch["date"]
+        day_set = set(sch["day"])
+        night_set = set(sch["night"])
+        all_names = day_set.union(night_set)
 
-            for col_idx, role in col_mapping.items():
-                day_name = day_cells[col_idx] if col_idx < len(day_cells) else ""
-                night_name = night_cells[col_idx] if col_idx < len(night_cells) else ""
-                day_name = day_name.strip()
-                night_name = night_name.strip()
-                if not day_name and not night_name:
-                    continue
+        for name in all_names:
+            # 判断是否连班：同一天同时出现在白班和夜班
+            if name in day_set and name in night_set:
+                if name in management_staff:
+                    # 运行管理人员：默认连班，例外除外
+                    if (date_str, name) not in exceptions:
+                        stats[name]["consecutive"] += 1
+                elif name in control_staff:
+                    # 运行控制/计划人员：按实际连班统计
+                    stats[name]["consecutive"] += 1
+                # 其他人员忽略
 
-                # 连班判断：同一个人同时出现在白班和夜班
-                if day_name and night_name:
-                    if role == "management":
-                        if (date_str, day_name) not in exceptions:
-                            stats[day_name]["consecutive"] += 1
-                    else:  # control 或 plan
-                        stats[day_name]["consecutive"] += 1
+    # 整理结果
+    result_data = []
+    for name in control_staff:
+        if name in stats:
+            result_data.append({"姓名": name, "连班天数": stats[name]["consecutive"]})
+        else:
+            result_data.append({"姓名": name, "连班天数": 0})
+    # 也显示运行管理人员的结果（可选）
+    for name in management_staff:
+        if name in stats:
+            result_data.append({"姓名": name, "连班天数": stats[name]["consecutive"]})
+        else:
+            result_data.append({"姓名": name, "连班天数": 0})
 
-        # 6. 输出结果
-        result_data = [{"姓名": name, "连班天数": data["consecutive"]}
-                       for name, data in stats.items()]
-        result_df = pd.DataFrame(result_data).sort_values(by="姓名")
-        st.subheader("📈 连班统计结果")
-        st.dataframe(result_df)
+    result_df = pd.DataFrame(result_data).sort_values(by="姓名")
+    st.subheader("📈 连班统计结果")
+    st.dataframe(result_df)
 
-        csv = result_df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("下载CSV", csv, "consecutive_shifts.csv", "text/csv")
+    csv = result_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button("下载CSV", csv, "consecutive_shifts.csv", "text/csv")
 
-        with st.expander("🔍 调试信息"):
-            st.write("识别的列映射：", col_mapping)
-            st.write("总天数：", len(schedules))
-            st.write("例外列表：", exceptions)
+    with st.expander("🔍 调试信息"):
+        st.write("总天数：", len(schedules))
+        st.write("前3天数据：", schedules[:3])
