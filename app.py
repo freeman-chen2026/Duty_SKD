@@ -5,7 +5,7 @@ from collections import defaultdict
 import pandas as pd
 
 st.set_page_config(page_title="值班连班统计", layout="wide")
-st.title("📊 值班表统计工具（连班/白班/夜班）")
+st.title("📊 值班表统计工具（运管主班/运控白班/运控夜班/补贴天数）")
 
 uploaded_file = st.file_uploader("上传PDF值班表", type=["pdf"])
 
@@ -84,7 +84,6 @@ if uploaded_file:
     st.success(f"成功识别 {len(schedules)} 天的排班数据")
 
     # 初始化统计字典
-    # 对于 control 人员和 management 人员分别统计
     all_persons = control_staff.union(management_staff)
     stats = {name: {"consecutive": 0, "pure_day": 0, "pure_night": 0, "total_night": 0} for name in all_persons}
 
@@ -98,37 +97,34 @@ if uploaded_file:
             in_night = name in night_set
 
             if in_day and in_night:
-                # 连班
                 if name in management_staff:
                     if (date_str, name) not in exceptions:
                         stats[name]["consecutive"] += 1
-                else:  # control 人员按实际连班统计
+                else:
                     stats[name]["consecutive"] += 1
             elif in_day and not in_night:
-                # 纯白班
                 stats[name]["pure_day"] += 1
             elif not in_day and in_night:
-                # 纯夜班
                 stats[name]["pure_night"] += 1
 
-    # 计算总夜班 = 连班天数 + 纯夜班
+    # 计算总夜班（补贴天数）
     for name in all_persons:
         stats[name]["total_night"] = stats[name]["consecutive"] + stats[name]["pure_night"]
 
-    # 转换为DataFrame
+    # 转换为DataFrame，使用新列名
     result_data = []
     for name in all_persons:
         result_data.append({
             "姓名": name,
-            "连班天数": stats[name]["consecutive"],
-            "纯白班": stats[name]["pure_day"],
-            "纯夜班": stats[name]["pure_night"],
-            "总夜班": stats[name]["total_night"]
+            "运管主班": stats[name]["consecutive"],   # 原连班天数
+            "运控白班": stats[name]["pure_day"],       # 原纯白班
+            "运控夜班": stats[name]["pure_night"],     # 原纯夜班
+            "补贴天数": stats[name]["total_night"]     # 原总夜班
         })
 
     result_df = pd.DataFrame(result_data).sort_values(by="姓名")
 
-    # 分两个子表显示（控制人员 & 管理人员）
+    # 分两个子表显示
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📌 运行控制/计划人员")
@@ -139,7 +135,7 @@ if uploaded_file:
         management_df = result_df[result_df["姓名"].isin(management_staff)]
         st.dataframe(management_df, use_container_width=True, height=400)
 
-    # 下载完整CSV
+    # 下载CSV（列名自动为新名称）
     csv = result_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button("📥 下载完整统计表 (CSV)", csv, "shift_statistics.csv", "text/csv")
 
