@@ -116,13 +116,14 @@ if uploaded_file:
     for name in all_persons:
         result_data.append({
             "姓名": name,
-            "运管主班": stats[name]["consecutive"],   # 原连班天数
-            "运控白班": stats[name]["pure_day"],       # 原纯白班
-            "运控夜班": stats[name]["pure_night"],     # 原纯夜班
-            "补贴天数": stats[name]["total_night"]     # 原总夜班
+            "运管主班": stats[name]["consecutive"],
+            "运控白班": stats[name]["pure_day"],
+            "运控夜班": stats[name]["pure_night"],
+            "补贴天数": stats[name]["total_night"]
         })
 
-    result_df = pd.DataFrame(result_data).sort_values(by="姓名")
+    # 按运管主班降序排序（主班多的排前面）
+    result_df = pd.DataFrame(result_data).sort_values(by="运管主班", ascending=False)
 
     # 分两个子表显示
     col1, col2 = st.columns(2)
@@ -135,7 +136,7 @@ if uploaded_file:
         management_df = result_df[result_df["姓名"].isin(management_staff)]
         st.dataframe(management_df, use_container_width=True, height=400)
 
-    # 下载CSV（列名自动为新名称）
+    # 下载CSV
     csv = result_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button("📥 下载完整统计表 (CSV)", csv, "shift_statistics.csv", "text/csv")
 
