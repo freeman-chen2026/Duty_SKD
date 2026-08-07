@@ -35,11 +35,16 @@ if uploaded_file:
 
     # ==================== Excel 解析 ====================
     if file_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]:
-        df = pd.read_excel(uploaded_file, header=None)
-        st.subheader("原始表格预览")
-        st.dataframe(df.head(15))
+        try:
+            df = pd.read_excel(uploaded_file, header=None, engine='openpyxl')
+        except Exception as e:
+            st.error(f"读取Excel失败: {e}")
+            st.stop()
 
-        # 查找表头行（包含“运行管理”的行）
+        st.subheader("原始表格预览（前20行）")
+        st.dataframe(df.head(20))
+
+        # 查找表头行（包含“运行管理”）
         header_idx = None
         for i, row in df.iterrows():
             row_str = " ".join([str(c) for c in row if pd.notna(c)])
@@ -48,8 +53,11 @@ if uploaded_file:
                 break
 
         if header_idx is None:
-            st.error("未找到包含'运行管理'的表头")
+            st.error("未找到包含'运行管理'的表头行")
             st.stop()
+
+        st.write(f"找到表头行索引: {header_idx}")
+        st.write("表头行内容:", df.iloc[header_idx].tolist())
 
         # 构建列映射
         col_mapping = {}
@@ -63,11 +71,18 @@ if uploaded_file:
                 col_mapping[idx] = "control"
             elif "运行保障" in val_str:
                 col_mapping[idx] = "control"
+            elif "运行支援" in val_str:
+                col_mapping[idx] = "control"
+
+        st.write("列映射:", col_mapping)
 
         # 提取数据行（从表头后第2行开始）
         data_start = header_idx + 2
         day_row = None
         date_str = ""
+
+        # 用于调试
+        debug_rows = []
 
         for i in range(data_start, len(df)):
             row = df.iloc[i]
@@ -79,11 +94,11 @@ if uploaded_file:
                 # 提取日期
                 date_match = re.search(r"(\d+月\d+日|\d+日)", first_cell)
                 date_str = date_match.group(1) if date_match else first_cell
-                # 第二列是“白”或“晚”
                 if "白" in second_cell:
                     day_row = row
+                    debug_rows.append(("白", i, date_str, row.tolist()))
                 elif "晚" in second_cell and day_row is not None:
-                    # 配对：上一行是白班，当前行是夜班
+                    # 配对
                     day_people = set()
                     night_people = set()
                     for col_idx, role in col_mapping.items():
@@ -94,11 +109,14 @@ if uploaded_file:
                         if night_name and night_name not in ["nan", "None", ""]:
                             night_people.add(night_name)
                     schedules.append({"date": date_str, "day": day_people, "night": night_people})
+                    debug_rows.append(("夜", i, date_str, row.tolist()))
                     day_row = None
 
-        if not schedules:
-            st.error("未能从Excel解析到排班数据")
-            st.stop()
+        st.write(f"共解析到 {len(schedules)} 天数据")
+        if schedules:
+            st.write("前3天示例:", schedules[:3])
+        else:
+            st.error("未解析到任何完整的天数，请检查表格结构是否符合：第一列日期含'日'，第二列含'白'或'晚'，且白晚行相邻。")
 
     # ==================== PDF 解析 ====================
     else:
@@ -144,6 +162,9 @@ if uploaded_file:
         if not schedules:
             st.error("未识别到任何排班数据，请检查文件格式")
             st.stop()
+
+    if not schedules:
+        st.stop()
 
     st.success(f"成功识别 {len(schedules)} 天的排班数据")
 
