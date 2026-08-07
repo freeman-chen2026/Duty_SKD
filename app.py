@@ -56,9 +56,6 @@ if uploaded_file:
             st.error("未找到包含'运行管理'的表头行")
             st.stop()
 
-        st.write(f"找到表头行索引: {header_idx}")
-        st.write("表头行内容:", df.iloc[header_idx].tolist())
-
         # 构建列映射
         col_mapping = {}
         for idx, val in enumerate(df.iloc[header_idx]):
@@ -74,28 +71,36 @@ if uploaded_file:
             elif "运行支援" in val_str:
                 col_mapping[idx] = "control"
 
-        st.write("列映射:", col_mapping)
-
-        # 提取数据行 - 从表头下一行开始（关键修改）
+        # 提取数据行（从表头下一行开始）
         data_start = header_idx + 1
+        current_date = None
         day_row = None
-        date_str = ""
 
         for i in range(data_start, len(df)):
             row = df.iloc[i]
-            first_cell = str(row[0]) if pd.notna(row[0]) else ""
             second_cell = str(row[1]) if pd.notna(row[1]) else ""
+            second_cell = second_cell.strip()
 
-            # 判断是否为日期行（第一列包含“日”）
-            if "日" in first_cell:
-                # 提取日期
+            # 检查是否为白班或夜班行
+            if "白" in second_cell:
+                # 白班行：提取日期（从第一列）
+                first_cell = str(row[0]) if pd.notna(row[0]) else ""
                 date_match = re.search(r"(\d+月\d+日|\d+日)", first_cell)
-                date_str = date_match.group(1) if date_match else first_cell
-                if "白" in second_cell:
-                    day_row = row
-                    st.write(f"识别白班: {date_str} 行 {i}")
-                elif "晚" in second_cell and day_row is not None:
-                    # 配对
+                if date_match:
+                    current_date = date_match.group(1)
+                else:
+                    # 如果第一列没有日期，尝试从第一列提取其他格式
+                    current_date = first_cell
+                day_row = row
+            elif "晚" in second_cell and day_row is not None:
+                # 夜班行，与之前记录的白班配对
+                if current_date is None:
+                    # 如果当前日期未设置，从夜班行的第一列尝试提取
+                    first_cell = str(row[0]) if pd.notna(row[0]) else ""
+                    date_match = re.search(r"(\d+月\d+日|\d+日)", first_cell)
+                    if date_match:
+                        current_date = date_match.group(1)
+                if current_date:
                     day_people = set()
                     night_people = set()
                     for col_idx, role in col_mapping.items():
@@ -105,17 +110,15 @@ if uploaded_file:
                             day_people.add(day_name)
                         if night_name and night_name not in ["nan", "None", ""]:
                             night_people.add(night_name)
-                    schedules.append({"date": date_str, "day": day_people, "night": night_people})
-                    st.write(f"配对夜班: {date_str} 行 {i}")
+                    schedules.append({"date": current_date, "day": day_people, "night": night_people})
                     day_row = None
+                    current_date = None
 
-        st.write(f"共解析到 {len(schedules)} 天数据")
-        if schedules:
-            st.write("前3天示例:", schedules[:3])
-        else:
-            st.error("未解析到任何完整的天数，请检查表格结构是否符合：第一列日期含'日'，第二列含'白'或'晚'，且白晚行相邻。")
+        if not schedules:
+            st.error("未能从Excel解析到排班数据，请检查格式")
+            st.stop()
 
-    # ==================== PDF 解析（保留不变） ====================
+    # ==================== PDF 解析 ====================
     else:
         with pdfplumber.open(uploaded_file) as pdf:
             all_text = ""
@@ -159,9 +162,6 @@ if uploaded_file:
         if not schedules:
             st.error("未识别到任何排班数据，请检查文件格式")
             st.stop()
-
-    if not schedules:
-        st.stop()
 
     st.success(f"成功识别 {len(schedules)} 天的排班数据")
 
