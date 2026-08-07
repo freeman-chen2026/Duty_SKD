@@ -76,13 +76,10 @@ if uploaded_file:
 
         st.write("列映射:", col_mapping)
 
-        # 提取数据行（从表头后第2行开始）
-        data_start = header_idx + 2
+        # 提取数据行 - 从表头下一行开始（关键修改）
+        data_start = header_idx + 1
         day_row = None
         date_str = ""
-
-        # 用于调试
-        debug_rows = []
 
         for i in range(data_start, len(df)):
             row = df.iloc[i]
@@ -96,7 +93,7 @@ if uploaded_file:
                 date_str = date_match.group(1) if date_match else first_cell
                 if "白" in second_cell:
                     day_row = row
-                    debug_rows.append(("白", i, date_str, row.tolist()))
+                    st.write(f"识别白班: {date_str} 行 {i}")
                 elif "晚" in second_cell and day_row is not None:
                     # 配对
                     day_people = set()
@@ -109,7 +106,7 @@ if uploaded_file:
                         if night_name and night_name not in ["nan", "None", ""]:
                             night_people.add(night_name)
                     schedules.append({"date": date_str, "day": day_people, "night": night_people})
-                    debug_rows.append(("夜", i, date_str, row.tolist()))
+                    st.write(f"配对夜班: {date_str} 行 {i}")
                     day_row = None
 
         st.write(f"共解析到 {len(schedules)} 天数据")
@@ -118,7 +115,7 @@ if uploaded_file:
         else:
             st.error("未解析到任何完整的天数，请检查表格结构是否符合：第一列日期含'日'，第二列含'白'或'晚'，且白晚行相邻。")
 
-    # ==================== PDF 解析 ====================
+    # ==================== PDF 解析（保留不变） ====================
     else:
         with pdfplumber.open(uploaded_file) as pdf:
             all_text = ""
