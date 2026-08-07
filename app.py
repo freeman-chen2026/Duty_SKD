@@ -40,50 +40,59 @@ if uploaded_file:
 
     lines = all_text.split("\n")
 
-    # 检测格式：是否存在同时包含“白”和“晚”的行（8月格式）
-    has_combined = any("白" in line and "晚" in line for line in lines)
-    if has_combined:
-        st.error("检测到白班和夜班在同一行（8月格式）。当前工具只支持白班和夜班分两行的格式（如6月）。请将PDF转换为分行格式后重试。")
-        st.stop()
-
-    # 提取每天的白班和夜班（分行格式）
-    day_shifts = []
+    day_shifts = []   # (日期, [姓名])
     night_shifts = []
 
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        if "白" in line and "晚" not in line:
-            date_match = re.search(r"(\d+月\d+日|\d+日)", line)
-            date_str = date_match.group(1) if date_match else ""
-            names = re.findall(r"[\u4e00-\u9fa5]{2,3}", line)
-            filtered_names = [n for n in names if n not in ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "运行控制", "运行管理", "白班", "夜班", "带班主任"]]
-            if filtered_names:
-                day_shifts.append((date_str, filtered_names))
-        elif "晚" in line:
-            date_match = re.search(r"(\d+月\d+日|\d+日)", line)
-            date_str = date_match.group(1) if date_match else ""
-            names = re.findall(r"[\u4e00-\u9fa5]{2,3}", line)
-            filtered_names = [n for n in names if n not in ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "运行控制", "运行管理", "白班", "夜班", "带班主任"]]
-            if filtered_names:
-                night_shifts.append((date_str, filtered_names))
 
-    # 配对
+        # 提取日期
+        date_match = re.search(r"(\d+月\d+日|\d+日)", line)
+        if not date_match:
+            continue
+        date_str = date_match.group(1)
+
+        # 提取所有中文姓名（2-3个汉字）
+        names = re.findall(r"[\u4e00-\u9fa5]{2,3}", line)
+        filter_keywords = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日",
+                           "运行控制", "运行管理", "白班", "夜班", "带班主任", "运行计划", "运行监控", "运行保障"]
+        filtered_names = [n for n in names if n not in filter_keywords]
+        if not filtered_names:
+            continue
+
+        has_white = "白" in line
+        has_night = "晚" in line
+
+        if has_white and has_night:
+            # 同行格式：按顺序分割，白班取前一半，夜班取后一半
+            split_idx = len(filtered_names) // 2
+            day_names = filtered_names[:split_idx]
+            night_names = filtered_names[split_idx:]
+            if day_names:
+                day_shifts.append((date_str, day_names))
+            if night_names:
+                night_shifts.append((date_str, night_names))
+        elif has_white and not has_night:
+            day_shifts.append((date_str, filtered_names))
+        elif has_night and not has_white:
+            night_shifts.append((date_str, filtered_names))
+
+    # 按日期配对
+    day_dict = {date: names for date, names in day_shifts}
+    night_dict = {date: names for date, names in night_shifts}
+    common_dates = set(day_dict.keys()) & set(night_dict.keys())
     schedules = []
-    min_len = min(len(day_shifts), len(night_shifts))
-    for i in range(min_len):
-        date_day, day_names = day_shifts[i]
-        date_night, night_names = night_shifts[i]
-        date_str = date_day if date_day else date_night
+    for date in sorted(common_dates):
         schedules.append({
-            "date": date_str,
-            "day": set(day_names),
-            "night": set(night_names)
+            "date": date,
+            "day": set(day_dict[date]),
+            "night": set(night_dict[date])
         })
 
     if not schedules:
-        st.error("未识别到任何排班数据，请检查PDF格式是否为白班夜班分行。")
+        st.error("未识别到任何排班数据，请检查PDF格式。")
         st.stop()
 
     st.success(f"成功识别 {len(schedules)} 天的排班数据")
