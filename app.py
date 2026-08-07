@@ -3,9 +3,10 @@ import pdfplumber
 import re
 from collections import defaultdict
 import pandas as pd
+from datetime import datetime
 
 st.set_page_config(page_title="值班连班统计", layout="wide")
-st.title("📊 值班表统计工具（运管主班/运控白班/运控夜班/补贴天数）")
+st.title("📊 值班表统计工具（运管主班/运控白班/运控夜班/补贴天数/休息天数）")
 
 uploaded_file = st.file_uploader("上传PDF值班表", type=["pdf"])
 
@@ -85,8 +86,9 @@ if uploaded_file:
 
     # 初始化统计字典
     all_persons = control_staff.union(management_staff)
-    stats = {name: {"consecutive": 0, "pure_day": 0, "pure_night": 0, "total_night": 0} for name in all_persons}
+    stats = {name: {"consecutive": 0, "pure_day": 0, "pure_night": 0, "total_night": 0, "rest_days": 0} for name in all_persons}
 
+    # ---- 先统计四种常规班次 ----
     for sch in schedules:
         date_str = sch["date"]
         day_set = sch["day"]
@@ -107,9 +109,36 @@ if uploaded_file:
             elif not in_day and in_night:
                 stats[name]["pure_night"] += 1
 
-    # 计算总夜班（补贴天数）
+    # 计算补贴天数
     for name in all_persons:
         stats[name]["total_night"] = stats[name]["consecutive"] + stats[name]["pure_night"]
+
+    # ---- 统计休息天数 ----
+    # 为每个人生成每天是否出勤（有白班或夜班）的布尔列表
+    for name in all_persons:
+        attendance = []
+        for sch in schedules:
+            day_set = sch["day"]
+            night_set = sch["night"]
+            in_day = name in day_set
+            in_night = name in night_set
+            attendance.append(in_day or in_night)  # True表示出勤
+
+        # 计算连续未出勤天数的段
+        rest_days = 0
+        count = 0
+        for present in attendance:
+            if not present:
+                count += 1
+            else:
+                if count >= 2:
+                    rest_days += (count - 1)
+                count = 0
+        # 处理最后一段
+        if count >= 2:
+            rest_days += (count - 1)
+
+        stats[name]["rest_days"] = rest_days
 
     # 转换为DataFrame，使用新列名
     result_data = []
@@ -119,10 +148,11 @@ if uploaded_file:
             "运管主班": stats[name]["consecutive"],
             "运控白班": stats[name]["pure_day"],
             "运控夜班": stats[name]["pure_night"],
-            "补贴天数": stats[name]["total_night"]
+            "补贴天数": stats[name]["total_night"],
+            "休息天数": stats[name]["rest_days"]
         })
 
-    # 按运管主班降序排序（主班多的排前面）
+    # 按运管主班降序排序
     result_df = pd.DataFrame(result_data).sort_values(by="运管主班", ascending=False)
 
     # 分两个子表显示
